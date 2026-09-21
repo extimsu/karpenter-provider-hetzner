@@ -45,6 +45,16 @@ spec:
             type: object
           spec:
             properties:
+              additionalNetworkIDs:
+                description: |-
+                  AdditionalNetworkIDs attaches further private networks after NetworkID,
+                  in order (e.g. a dedicated egress network). NetworkID stays the primary
+                  network used for the node's InternalIP.
+                items:
+                  format: int64
+                  minimum: 1
+                  type: integer
+                type: array
               enablePublicIPv4:
                 default: true
                 description: |-

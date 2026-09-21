@@ -547,3 +547,24 @@ func TestCreate_SpreadStrategy_EmptyNodePool(t *testing.T) {
 		t.Errorf("expected PG name %q for empty NodePool, got %q", "karpenter-test-cluster", pgc.lastCreateOpts.Name)
 	}
 }
+
+func TestCreate_AdditionalNetworksAttachedInOrder(t *testing.T) {
+	client := newMockServerClient()
+	p := NewProvider(client, "test-cluster")
+
+	_, err := p.Create(context.Background(), CreateOpts{
+		Name:                 "test-node",
+		ServerType:           "cx11",
+		Location:             "nbg1",
+		Image:                &hcloud.Image{ID: 1},
+		NetworkID:            10,
+		AdditionalNetworkIDs: []int64{20},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	nets := client.lastOpts.Networks
+	if len(nets) != 2 || nets[0].ID != 10 || nets[1].ID != 20 {
+		t.Errorf("expected networks [10 20], got %+v", nets)
+	}
+}

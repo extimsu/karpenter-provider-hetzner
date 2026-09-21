@@ -77,6 +77,11 @@ func (in *HCloudNodeClassSpec) DeepCopyInto(out *HCloudNodeClassSpec) {
 		copy(*out, *in)
 	}
 	in.ImageSelector.DeepCopyInto(&out.ImageSelector)
+	if in.AdditionalNetworkIDs != nil {
+		in, out := &in.AdditionalNetworkIDs, &out.AdditionalNetworkIDs
+		*out = make([]int64, len(*in))
+		copy(*out, *in)
+	}
 	if in.FirewallIDs != nil {
 		in, out := &in.FirewallIDs, &out.FirewallIDs
 		*out = make([]int64, len(*in))

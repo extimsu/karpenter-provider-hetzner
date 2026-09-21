@@ -70,6 +70,7 @@ type CreateOpts struct {
 	Location               string
 	Image                  *hcloud.Image
 	NetworkID              int64
+	AdditionalNetworkIDs   []int64
 	FirewallIDs            []int64
 	SSHKeyIDs              []int64
 	Labels                 map[string]string
@@ -152,6 +153,9 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 	var networks []*hcloud.Network
 	if opts.NetworkID > 0 {
 		networks = []*hcloud.Network{{ID: opts.NetworkID}}
+	}
+	for _, id := range opts.AdditionalNetworkIDs {
+		networks = append(networks, &hcloud.Network{ID: id})
 	}
 
 	// Build firewalls list.

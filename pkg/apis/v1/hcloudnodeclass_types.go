@@ -33,6 +33,13 @@ type HCloudNodeClassSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	NetworkID int64 `json:"networkID"`
 
+	// AdditionalNetworkIDs attaches further private networks after NetworkID,
+	// in order (e.g. a dedicated egress network). NetworkID stays the primary
+	// network used for the node's InternalIP.
+	// +kubebuilder:validation:items:Minimum=1
+	// +optional
+	AdditionalNetworkIDs []int64 `json:"additionalNetworkIDs,omitempty"`
+
 	// +optional
 	FirewallIDs []int64 `json:"firewallIDs,omitempty"`
 

@@ -69,16 +69,19 @@ func (c *Controller) Reconcile(ctx context.Context, nc *apiv1.HCloudNodeClass) (
 	stored := nc.DeepCopy()
 
 	// Network validation.
-	net, _, err := c.networks.GetByID(ctx, nc.Spec.NetworkID)
-	switch {
-	case err != nil:
-		nc.StatusConditions().SetUnknownWithReason(apiv1.ConditionTypeNetworkReady, "NetworkCheckFailed", err.Error())
-		c.warnf(nc, "NetworkCheckFailed", "ValidateNetwork", "network check failed: %v", err)
-	case net == nil:
-		nc.StatusConditions().SetFalse(apiv1.ConditionTypeNetworkReady, "NetworkNotFound", "configured networkID does not exist")
-		c.warnf(nc, "NetworkNotFound", "ValidateNetwork", "networkID %d does not exist", nc.Spec.NetworkID)
-	default:
-		nc.StatusConditions().SetTrue(apiv1.ConditionTypeNetworkReady)
+	nc.StatusConditions().SetTrue(apiv1.ConditionTypeNetworkReady)
+	for _, id := range append([]int64{nc.Spec.NetworkID}, nc.Spec.AdditionalNetworkIDs...) {
+		net, _, err := c.networks.GetByID(ctx, id)
+		if err != nil {
+			nc.StatusConditions().SetUnknownWithReason(apiv1.ConditionTypeNetworkReady, "NetworkCheckFailed", err.Error())
+			c.warnf(nc, "NetworkCheckFailed", "ValidateNetwork", "network check failed: %v", err)
+			break
+		}
+		if net == nil {
+			nc.StatusConditions().SetFalse(apiv1.ConditionTypeNetworkReady, "NetworkNotFound", fmt.Sprintf("networkID %d does not exist", id))
+			c.warnf(nc, "NetworkNotFound", "ValidateNetwork", "networkID %d does not exist", id)
+			break
+		}
 	}
 
 	// Validate referenced firewalls and SSH keys exist.

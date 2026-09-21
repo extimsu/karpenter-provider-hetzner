@@ -592,3 +592,31 @@ func TestResolvedImagesGeneration_AbsentConditionFailsSafe(t *testing.T) {
 		t.Errorf("resolvedImagesGeneration = %d, want 1 (the generation the images were resolved under)", got)
 	}
 }
+
+type fakeNetworksByID map[int64]*hcloud.Network
+
+func (f fakeNetworksByID) GetByID(_ context.Context, id int64) (*hcloud.Network, *hcloud.Response, error) {
+	return f[id], nil, nil
+}
+
+func TestReconcile_AdditionalNetworkNotFound(t *testing.T) {
+	_ = apiv1.SchemeBuilder.AddToScheme(scheme.Scheme)
+	nc := newNodeClass()
+	nc.Spec.AdditionalNetworkIDs = []int64{99}
+	kube := fake.NewClientBuilder().WithScheme(scheme.Scheme).
+		WithObjects(nc).WithStatusSubresource(nc).Build()
+	img := imagefamily.NewProvider(fakeImages{img: &hcloud.Image{ID: 42, Description: "Ubuntu 24.04"}})
+	nets := fakeNetworksByID{nc.Spec.NetworkID: {ID: nc.Spec.NetworkID}} // 99 missing
+	c := NewController(kube, nets, fakeFirewalls{}, fakeSSHKeys{}, img)
+
+	if _, err := c.Reconcile(context.Background(), nc.DeepCopy()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	got := &apiv1.HCloudNodeClass{}
+	if err := kube.Get(context.Background(), client.ObjectKeyFromObject(nc), got); err != nil {
+		t.Fatal(err)
+	}
+	if got.StatusConditions().Get(apiv1.ConditionTypeNetworkReady).IsTrue() {
+		t.Error("NetworkReady should be false when an additional network is missing")
+	}
+}
