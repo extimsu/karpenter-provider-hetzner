@@ -1284,3 +1284,11 @@ func TestCreate_IgnoresStaleGenerationResolvedImage(t *testing.T) {
 		t.Errorf("launched image %d, want 42 from a live lookup (99 means the pre-edit status entry won)", got)
 	}
 }
+
+func (f *fakeServerClient) AttachToNetwork(_ context.Context, _ *hcloud.Server, _ hcloud.ServerAttachToNetworkOpts) (*hcloud.Action, *hcloud.Response, error) {
+	return nil, nil, nil
+}
+
+func (f *fakeServerClient) Poweron(_ context.Context, _ *hcloud.Server) (*hcloud.Action, *hcloud.Response, error) {
+	return nil, nil, nil
+}

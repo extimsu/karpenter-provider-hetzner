@@ -3,6 +3,7 @@ package instance
 import (
 	"context"
 	"fmt"
+	"net"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ type ServerClient interface {
 	DeleteWithResult(ctx context.Context, server *hcloud.Server) (*hcloud.ServerDeleteResult, *hcloud.Response, error)
 	GetByID(ctx context.Context, id int64) (*hcloud.Server, *hcloud.Response, error)
 	AllWithOpts(ctx context.Context, opts hcloud.ServerListOpts) ([]*hcloud.Server, error)
+	AttachToNetwork(ctx context.Context, server *hcloud.Server, opts hcloud.ServerAttachToNetworkOpts) (*hcloud.Action, *hcloud.Response, error)
+	Poweron(ctx context.Context, server *hcloud.Server) (*hcloud.Action, *hcloud.Response, error)
 }
 
 // PlacementGroupClient is the narrow interface for the hcloud placement groups API.
@@ -70,6 +73,7 @@ type CreateOpts struct {
 	Location               string
 	Image                  *hcloud.Image
 	NetworkID              int64
+	NetworkIPRange         string
 	AdditionalNetworkIDs   []int64
 	FirewallIDs            []int64
 	SSHKeyIDs              []int64
@@ -150,8 +154,18 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 	}
 
 	// Build networks list.
+	// With NetworkIPRange the primary network is attached after create (the
+	// create API cannot choose a subnet), so the server must start stopped.
+	var ipRange *net.IPNet
+	if opts.NetworkIPRange != "" {
+		_, r, err := net.ParseCIDR(opts.NetworkIPRange)
+		if err != nil {
+			return nil, fmt.Errorf("parsing networkIPRange %q: %w", opts.NetworkIPRange, err)
+		}
+		ipRange = r
+	}
 	var networks []*hcloud.Network
-	if opts.NetworkID > 0 {
+	if opts.NetworkID > 0 && ipRange == nil {
 		networks = []*hcloud.Network{{ID: opts.NetworkID}}
 	}
 	for _, id := range opts.AdditionalNetworkIDs {
@@ -182,6 +196,9 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 		SSHKeys:    sshKeys,
 		Labels:     labels,
 		UserData:   opts.UserData,
+	}
+	if ipRange != nil {
+		createOpts.StartAfterCreate = hcloud.Ptr(false)
 	}
 
 	createOpts.PublicNet = &hcloud.ServerCreatePublicNet{
@@ -219,6 +236,15 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 			}
 		}
 	}
+	if ipRange != nil {
+		if err := p.attachAndStart(ctx, result.Server, opts.NetworkID, ipRange); err != nil {
+			// Don't leak a stopped server Karpenter no longer tracks.
+			if _, _, derr := p.client.DeleteWithResult(ctx, result.Server); derr != nil {
+				log.Error(derr, "deleting server after failed network attach", "name", opts.Name)
+			}
+			return nil, fmt.Errorf("server %q: %w", opts.Name, err)
+		}
+	}
 	pgAttached := createOpts.PlacementGroup != nil
 	imageID := int64(0)
 	if opts.Image != nil {
@@ -232,6 +258,35 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 		"placementGroupAttached", pgAttached,
 	)
 	return result.Server, nil
+}
+
+// attachAndStart attaches the primary network in ipRange, then powers on.
+func (p *Provider) attachAndStart(ctx context.Context, server *hcloud.Server, networkID int64, ipRange *net.IPNet) error {
+	action, _, err := p.client.AttachToNetwork(ctx, server, hcloud.ServerAttachToNetworkOpts{
+		Network: &hcloud.Network{ID: networkID},
+		IPRange: ipRange,
+	})
+	if err != nil {
+		return fmt.Errorf("attaching network %d in %s: %w", networkID, ipRange, err)
+	}
+	if err := p.wait(ctx, action); err != nil {
+		return fmt.Errorf("waiting for network attach: %w", err)
+	}
+	action, _, err = p.client.Poweron(ctx, server)
+	if err != nil {
+		return fmt.Errorf("powering on: %w", err)
+	}
+	if err := p.wait(ctx, action); err != nil {
+		return fmt.Errorf("waiting for power on: %w", err)
+	}
+	return nil
+}
+
+func (p *Provider) wait(ctx context.Context, action *hcloud.Action) error {
+	if p.waiter == nil || action == nil {
+		return nil
+	}
+	return p.waiter.WaitFor(ctx, action)
 }
 
 // Delete removes the server identified by providerID. It returns nil once the

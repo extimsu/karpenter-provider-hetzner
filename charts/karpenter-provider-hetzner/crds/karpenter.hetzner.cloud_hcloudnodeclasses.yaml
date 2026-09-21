@@ -106,6 +106,12 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              networkIPRange:
+                description: |-
+                  NetworkIPRange pins the node's IP on NetworkID to this subnet (CIDR of an
+                  existing subnet of the network). Without it hcloud picks any subnet.
+                  The server is created stopped, attached with this ip_range, then powered on.
+                type: string
               placementGroupStrategy:
                 default: spread
                 enum:

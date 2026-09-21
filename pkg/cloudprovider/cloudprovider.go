@@ -284,6 +284,7 @@ func (cp *CloudProvider) Create(ctx context.Context, nodeClaim *karpv1.NodeClaim
 		Location:               location,
 		Image:                  image,
 		NetworkID:              nodeClass.Spec.NetworkID,
+		NetworkIPRange:         nodeClass.Spec.NetworkIPRange,
 		AdditionalNetworkIDs:   nodeClass.Spec.AdditionalNetworkIDs,
 		FirewallIDs:            nodeClass.Spec.FirewallIDs,
 		SSHKeyIDs:              nodeClass.Spec.SSHKeyIDs,

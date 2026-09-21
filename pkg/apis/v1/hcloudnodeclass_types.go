@@ -33,6 +33,12 @@ type HCloudNodeClassSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	NetworkID int64 `json:"networkID"`
 
+	// NetworkIPRange pins the node's IP on NetworkID to this subnet (CIDR of an
+	// existing subnet of the network). Without it hcloud picks any subnet.
+	// The server is created stopped, attached with this ip_range, then powered on.
+	// +optional
+	NetworkIPRange string `json:"networkIPRange,omitempty"`
+
 	// AdditionalNetworkIDs attaches further private networks after NetworkID,
 	// in order (e.g. a dedicated egress network). NetworkID stays the primary
 	// network used for the node's InternalIP.

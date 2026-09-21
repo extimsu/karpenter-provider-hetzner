@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -34,6 +35,20 @@ type mockServerClient struct {
 	createErr        error
 	deleteErr        error
 	lastOpts         hcloud.ServerCreateOpts
+	attachOpts       *hcloud.ServerAttachToNetworkOpts
+	attachErr        error
+	calls            []string
+}
+
+func (m *mockServerClient) AttachToNetwork(_ context.Context, _ *hcloud.Server, opts hcloud.ServerAttachToNetworkOpts) (*hcloud.Action, *hcloud.Response, error) {
+	m.calls = append(m.calls, "attach")
+	m.attachOpts = &opts
+	return nil, nil, m.attachErr
+}
+
+func (m *mockServerClient) Poweron(_ context.Context, _ *hcloud.Server) (*hcloud.Action, *hcloud.Response, error) {
+	m.calls = append(m.calls, "poweron")
+	return nil, nil, nil
 }
 
 func newMockServerClient() *mockServerClient {
@@ -566,5 +581,57 @@ func TestCreate_AdditionalNetworksAttachedInOrder(t *testing.T) {
 	nets := client.lastOpts.Networks
 	if len(nets) != 2 || nets[0].ID != 10 || nets[1].ID != 20 {
 		t.Errorf("expected networks [10 20], got %+v", nets)
+	}
+}
+
+func TestCreate_NetworkIPRangeAttachesStoppedServerThenPowersOn(t *testing.T) {
+	client := newMockServerClient()
+	p := NewProvider(client, "test-cluster")
+
+	_, err := p.Create(context.Background(), CreateOpts{
+		Name:                 "test-node",
+		ServerType:           "cx11",
+		Location:             "nbg1",
+		Image:                &hcloud.Image{ID: 1},
+		NetworkID:            10,
+		NetworkIPRange:       "10.0.20.0/24",
+		AdditionalNetworkIDs: []int64{20},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if s := client.lastOpts.StartAfterCreate; s == nil || *s {
+		t.Error("server must be created stopped when networkIPRange is set")
+	}
+	nets := client.lastOpts.Networks
+	if len(nets) != 1 || nets[0].ID != 20 {
+		t.Errorf("primary network must be attached after create, got create networks %+v", nets)
+	}
+	if a := client.attachOpts; a == nil || a.Network.ID != 10 || a.IPRange.String() != "10.0.20.0/24" {
+		t.Errorf("expected attach to network 10 in 10.0.20.0/24, got %+v", a)
+	}
+	if got := strings.Join(client.calls, ","); got != "attach,poweron" {
+		t.Errorf("expected attach then poweron, got %q", got)
+	}
+}
+
+func TestCreate_NetworkIPRangeAttachFailureDeletesServer(t *testing.T) {
+	client := newMockServerClient()
+	client.attachErr = errors.New("ip_range not in network")
+	p := NewProvider(client, "test-cluster")
+
+	_, err := p.Create(context.Background(), CreateOpts{
+		Name:           "test-node",
+		ServerType:     "cx11",
+		Location:       "nbg1",
+		Image:          &hcloud.Image{ID: 1},
+		NetworkID:      10,
+		NetworkIPRange: "10.0.20.0/24",
+	})
+	if err == nil {
+		t.Fatal("expected error when attach fails")
+	}
+	if len(client.deleted) != 1 {
+		t.Errorf("stopped server must be deleted after a failed attach, deleted=%v", client.deleted)
 	}
 }
