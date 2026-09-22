@@ -118,6 +118,17 @@ spec:
                 - spread
                 - none
                 type: string
+              serverNamePrefix:
+                description: |-
+                  ServerNamePrefix names servers (and so nodes: the hostname comes from the
+                  server name) "<prefix>-NN" instead of after the NodeClaim, continuing the
+                  numbering of existing non-Karpenter servers with that prefix: NN is the
+                  lowest free number above the highest such server (e.g. static workers
+                  -01..-04 -> Karpenter nodes -05, -06, ...). Server names are unique per
+                  project, so concurrent creates retry with the next number.
+                maxLength: 58
+                pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?$
+                type: string
               sshKeyIDs:
                 items:
                   format: int64

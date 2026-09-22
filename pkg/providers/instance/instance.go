@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -74,6 +75,7 @@ type CreateOpts struct {
 	Image                  *hcloud.Image
 	NetworkID              int64
 	NetworkIPRange         string
+	ServerNamePrefix       string
 	AdditionalNetworkIDs   []int64
 	FirewallIDs            []int64
 	SSHKeyIDs              []int64
@@ -217,7 +219,22 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 		createOpts.PlacementGroup = &hcloud.PlacementGroup{ID: pgID}
 	}
 
+	var err error
+	if opts.ServerNamePrefix != "" {
+		if createOpts.Name, err = p.nextServerName(ctx, opts.ServerNamePrefix); err != nil {
+			return nil, err
+		}
+	}
 	result, _, err := p.client.Create(ctx, createOpts)
+	// Another create took the same number between list and create; names are
+	// unique per project, so recompute (the winner is listed now) and retry.
+	for attempt := 1; err != nil && opts.ServerNamePrefix != "" &&
+		hcloud.IsError(err, hcloud.ErrorCodeUniquenessError) && attempt <= maxNameAttempts; attempt++ {
+		if createOpts.Name, err = p.nextServerName(ctx, opts.ServerNamePrefix); err != nil {
+			return nil, err
+		}
+		result, _, err = p.client.Create(ctx, createOpts)
+	}
 	if err != nil {
 		return nil, MapCreateError(err)
 	}
@@ -258,6 +275,36 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 		"placementGroupAttached", pgAttached,
 	)
 	return result.Server, nil
+}
+
+const maxNameAttempts = 5
+
+// nextServerName returns "<prefix>-NN": the lowest number above the highest
+// non-Karpenter server named "<prefix>-<n>" that no server uses.
+func (p *Provider) nextServerName(ctx context.Context, prefix string) (string, error) {
+	servers, err := p.client.AllWithOpts(ctx, hcloud.ServerListOpts{})
+	if err != nil {
+		return "", fmt.Errorf("listing servers for name %s-NN: %w", prefix, err)
+	}
+	re := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `-(\d+)$`)
+	used := map[int]bool{}
+	staticMax := 0
+	for _, s := range servers {
+		m := re.FindStringSubmatch(s.Name)
+		if m == nil {
+			continue
+		}
+		n, _ := strconv.Atoi(m[1])
+		used[n] = true
+		if _, karpenter := s.Labels[apiv1.ServerLabelManagedBy]; !karpenter && n > staticMax {
+			staticMax = n
+		}
+	}
+	n := staticMax + 1
+	for used[n] {
+		n++
+	}
+	return fmt.Sprintf("%s-%02d", prefix, n), nil
 }
 
 // attachAndStart attaches the primary network in ipRange, then powers on.

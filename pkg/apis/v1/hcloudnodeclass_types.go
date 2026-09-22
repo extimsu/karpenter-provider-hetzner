@@ -39,6 +39,17 @@ type HCloudNodeClassSpec struct {
 	// +optional
 	NetworkIPRange string `json:"networkIPRange,omitempty"`
 
+	// ServerNamePrefix names servers (and so nodes: the hostname comes from the
+	// server name) "<prefix>-NN" instead of after the NodeClaim, continuing the
+	// numbering of existing non-Karpenter servers with that prefix: NN is the
+	// lowest free number above the highest such server (e.g. static workers
+	// -01..-04 -> Karpenter nodes -05, -06, ...). Server names are unique per
+	// project, so concurrent creates retry with the next number.
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=58
+	// +optional
+	ServerNamePrefix string `json:"serverNamePrefix,omitempty"`
+
 	// AdditionalNetworkIDs attaches further private networks after NetworkID,
 	// in order (e.g. a dedicated egress network). NetworkID stays the primary
 	// network used for the node's InternalIP.

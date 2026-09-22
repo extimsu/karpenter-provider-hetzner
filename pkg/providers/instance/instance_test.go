@@ -35,6 +35,7 @@ type mockServerClient struct {
 	createErr        error
 	deleteErr        error
 	lastOpts         hcloud.ServerCreateOpts
+	uniqueNames      bool // reject duplicate names like hcloud does
 	attachOpts       *hcloud.ServerAttachToNetworkOpts
 	attachErr        error
 	calls            []string
@@ -62,6 +63,13 @@ func (m *mockServerClient) Create(_ context.Context, opts hcloud.ServerCreateOpt
 	m.lastOpts = opts
 	if m.createErr != nil {
 		return hcloud.ServerCreateResult{}, nil, m.createErr
+	}
+	if m.uniqueNames {
+		for _, s := range m.servers {
+			if s.Name == opts.Name {
+				return hcloud.ServerCreateResult{}, nil, hcloud.Error{Code: hcloud.ErrorCodeUniquenessError, Message: "server name is already used"}
+			}
+		}
 	}
 	id := m.nextID
 	m.nextID++
@@ -634,4 +642,106 @@ func TestCreate_NetworkIPRangeAttachFailureDeletesServer(t *testing.T) {
 	if len(client.deleted) != 1 {
 		t.Errorf("stopped server must be deleted after a failed attach, deleted=%v", client.deleted)
 	}
+}
+
+func namedServer(client *mockServerClient, name string, karpenter bool) {
+	labels := map[string]string{}
+	if karpenter {
+		labels[apiv1.ServerLabelManagedBy] = apiv1.ServerValueManagedBy
+	}
+	id := client.nextID
+	client.nextID++
+	client.servers[id] = &hcloud.Server{ID: id, Name: name, Labels: labels}
+}
+
+func createWithPrefix(t *testing.T, client *mockServerClient) string {
+	t.Helper()
+	server, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name:             "default-abcde",
+		ServerType:       "cx23",
+		Location:         "fsn1",
+		Image:            &hcloud.Image{ID: 1},
+		ServerNamePrefix: "de-fsn1-dev-worker",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	return server.Name
+}
+
+func TestCreate_ServerNamePrefixContinuesStaticNumbering(t *testing.T) {
+	client := newMockServerClient()
+	for _, n := range []string{"01", "02", "03", "04"} {
+		namedServer(client, "de-fsn1-dev-worker-"+n, false)
+	}
+	namedServer(client, "de-fsn1-dev-master-01", false) // other prefix: ignored
+	if got := createWithPrefix(t, client); got != "de-fsn1-dev-worker-05" {
+		t.Errorf("expected de-fsn1-dev-worker-05, got %s", got)
+	}
+}
+
+func TestCreate_ServerNamePrefixReusesLowestFreeAboveStatic(t *testing.T) {
+	client := newMockServerClient()
+	namedServer(client, "de-fsn1-dev-worker-04", false)
+	namedServer(client, "de-fsn1-dev-worker-05", true)
+	namedServer(client, "de-fsn1-dev-worker-07", true)
+	// 01..03 are free but below the highest static server: not reused.
+	if got := createWithPrefix(t, client); got != "de-fsn1-dev-worker-06" {
+		t.Errorf("expected de-fsn1-dev-worker-06, got %s", got)
+	}
+}
+
+func TestCreate_ServerNamePrefixRetriesOnNameConflict(t *testing.T) {
+	client := newMockServerClient()
+	client.uniqueNames = true
+	namedServer(client, "de-fsn1-dev-worker-04", false)
+	// Simulate a concurrent create that isn't visible to the first list call:
+	// the first attempt picks -05, which is taken, so the retry must list again.
+	racing := &racingLister{mockServerClient: client, hidden: "de-fsn1-dev-worker-05"}
+	namedServer(client, "de-fsn1-dev-worker-05", true)
+	server, err := NewProvider(racing, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+		ServerNamePrefix: "de-fsn1-dev-worker",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if server.Name != "de-fsn1-dev-worker-06" {
+		t.Errorf("expected retry to pick de-fsn1-dev-worker-06, got %s", server.Name)
+	}
+}
+
+func TestCreate_NoServerNamePrefixUsesNodeClaimName(t *testing.T) {
+	client := newMockServerClient()
+	server, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if server.Name != "default-abcde" {
+		t.Errorf("expected NodeClaim name, got %s", server.Name)
+	}
+}
+
+// racingLister hides one server from the first list call only.
+type racingLister struct {
+	*mockServerClient
+	hidden string
+	listed bool
+}
+
+func (r *racingLister) AllWithOpts(ctx context.Context, opts hcloud.ServerListOpts) ([]*hcloud.Server, error) {
+	all, err := r.mockServerClient.AllWithOpts(ctx, opts)
+	if r.listed {
+		return all, err
+	}
+	r.listed = true
+	var visible []*hcloud.Server
+	for _, s := range all {
+		if s.Name != r.hidden {
+			visible = append(visible, s)
+		}
+	}
+	return visible, err
 }
