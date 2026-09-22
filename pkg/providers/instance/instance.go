@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -127,9 +128,21 @@ func (p *Provider) Create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 	result := metrics.ResultSuccess
 	if err != nil {
 		result = metrics.ResultError
+		metrics.RecordServerCreateError(errorCode(err))
 	}
 	metrics.RecordServerCreate(result, time.Since(start))
 	return server, err
+}
+
+// errorCode returns the hcloud error code in err's chain, or "other": a bounded
+// label value that tells quota (resource_limit_exceeded) from a type being out of
+// stock (resource_unavailable).
+func errorCode(err error) string {
+	var he hcloud.Error
+	if errors.As(err, &he) && he.Code != "" {
+		return string(he.Code)
+	}
+	return "other"
 }
 
 // create is the internal implementation of Create, instrumented by Create().

@@ -2,6 +2,7 @@ package instance
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -325,6 +326,19 @@ func TestCreate_WaitsForActionsAndSetsPublicNet(t *testing.T) {
 	}
 	if !client.lastOpts.PublicNet.EnableIPv6 {
 		t.Error("expected public IPv6 to default to enabled")
+	}
+}
+
+func TestErrorCode(t *testing.T) {
+	quota := hcloud.Error{Code: hcloud.ErrorCodeResourceLimitExceeded, Message: "shared core limit exceeded"}
+	for want, err := range map[string]error{
+		"resource_limit_exceeded": fmt.Errorf("creating server: %w", MapCreateError(quota)), // through the ICE wrapper
+		"uniqueness_error":        fmt.Errorf("server %q: %w", "x", hcloud.Error{Code: hcloud.ErrorCodeUniquenessError}),
+		"other":                   errors.New("boom"),
+	} {
+		if got := errorCode(err); got != want {
+			t.Errorf("errorCode(%v) = %q, want %q", err, got, want)
+		}
 	}
 }
 
