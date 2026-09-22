@@ -69,24 +69,25 @@ func NewProviderWithPlacementGroups(client ServerClient, pgClient PlacementGroup
 
 // CreateOpts contains all parameters needed to create a Hetzner server node.
 type CreateOpts struct {
-	Name                   string
-	ServerType             string
-	Location               string
-	Image                  *hcloud.Image
-	NetworkID              int64
-	NetworkIPRange         string
-	ServerNamePrefix       string
-	NetworkIPBase          string
-	AdditionalNetworkIDs   []int64
-	FirewallIDs            []int64
-	SSHKeyIDs              []int64
-	Labels                 map[string]string
-	UserData               string
-	NodeClaim              string
-	NodePool               string
-	PlacementGroupStrategy string
-	EnablePublicIPv4       bool
-	EnablePublicIPv6       bool
+	Name                     string
+	ServerType               string
+	Location                 string
+	Image                    *hcloud.Image
+	NetworkID                int64
+	NetworkIPRange           string
+	ServerNamePrefix         string
+	NetworkIPBase            string
+	AdditionalNetworkIDs     []int64
+	AdditionalNetworkIPBases []string
+	FirewallIDs              []int64
+	SSHKeyIDs                []int64
+	Labels                   map[string]string
+	UserData                 string
+	NodeClaim                string
+	NodePool                 string
+	PlacementGroupStrategy   string
+	EnablePublicIPv4         bool
+	EnablePublicIPv6         bool
 }
 
 // placementGroupName returns the deterministic placement group name for a node
@@ -171,7 +172,10 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 	if opts.NetworkID > 0 && ipRange == nil {
 		networks = []*hcloud.Network{{ID: opts.NetworkID}}
 	}
-	for _, id := range opts.AdditionalNetworkIDs {
+	for i, id := range opts.AdditionalNetworkIDs {
+		if ipRange != nil && additionalBase(opts, i) != "" {
+			continue // attached with a fixed IP before power-on, like the primary
+		}
 		networks = append(networks, &hcloud.Network{ID: id})
 	}
 
@@ -223,7 +227,7 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 	var err error
 	var nameNum int
 	if opts.ServerNamePrefix != "" {
-		if createOpts.Name, nameNum, err = p.nextServerName(ctx, opts.ServerNamePrefix); err != nil {
+		if createOpts.Name, nameNum, err = p.nextServerName(ctx, opts); err != nil {
 			return nil, err
 		}
 	}
@@ -232,7 +236,7 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 	// unique per project, so recompute (the winner is listed now) and retry.
 	for attempt := 1; err != nil && opts.ServerNamePrefix != "" &&
 		hcloud.IsError(err, hcloud.ErrorCodeUniquenessError) && attempt <= maxNameAttempts; attempt++ {
-		if createOpts.Name, nameNum, err = p.nextServerName(ctx, opts.ServerNamePrefix); err != nil {
+		if createOpts.Name, nameNum, err = p.nextServerName(ctx, opts); err != nil {
 			return nil, err
 		}
 		result, _, err = p.client.Create(ctx, createOpts)
@@ -256,9 +260,9 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 		}
 	}
 	if ipRange != nil {
-		ip, err := fixedIP(opts.NetworkIPBase, nameNum, ipRange)
+		attachments, err := planAttachments(opts, ipRange, nameNum)
 		if err == nil {
-			err = p.attachAndStart(ctx, result.Server, opts.NetworkID, ipRange, ip)
+			err = p.attachAndStart(ctx, result.Server, attachments)
 		}
 		if err != nil {
 			// Don't leak a stopped server Karpenter no longer tracks.
@@ -286,16 +290,25 @@ func (p *Provider) create(ctx context.Context, opts CreateOpts) (*hcloud.Server,
 const maxNameAttempts = 5
 
 // nextServerName returns "<prefix>-NN": the lowest number above the highest
-// non-Karpenter server named "<prefix>-<n>" that no server uses.
-func (p *Provider) nextServerName(ctx context.Context, prefix string) (string, int, error) {
+// non-Karpenter server named "<prefix>-<n>" that no server uses and whose
+// fixed IPs (base + n on any configured network) no server holds yet.
+func (p *Provider) nextServerName(ctx context.Context, opts CreateOpts) (string, int, error) {
+	prefix := opts.ServerNamePrefix
 	servers, err := p.client.AllWithOpts(ctx, hcloud.ServerListOpts{})
 	if err != nil {
 		return "", 0, fmt.Errorf("listing servers for name %s-NN: %w", prefix, err)
 	}
 	re := regexp.MustCompile(`^` + regexp.QuoteMeta(prefix) + `-(\d+)$`)
 	used := map[int]bool{}
+	usedIPs := map[string]bool{}
 	staticMax := 0
 	for _, s := range servers {
+		for _, pn := range s.PrivateNet {
+			usedIPs[pn.IP.String()] = true
+			for _, a := range pn.Aliases {
+				usedIPs[a.String()] = true
+			}
+		}
 		m := re.FindStringSubmatch(s.Name)
 		if m == nil {
 			continue
@@ -306,8 +319,17 @@ func (p *Provider) nextServerName(ctx context.Context, prefix string) (string, i
 			staticMax = n
 		}
 	}
+	bases := append([]string{opts.NetworkIPBase}, opts.AdditionalNetworkIPBases...)
+	ipTaken := func(n int) bool {
+		for _, b := range bases {
+			if ip, err := fixedIP(b, n, nil); err == nil && ip != nil && usedIPs[ip.String()] {
+				return true
+			}
+		}
+		return false
+	}
 	n := staticMax + 1
-	for used[n] {
+	for used[n] || ipTaken(n) {
 		n++
 	}
 	return fmt.Sprintf("%s-%02d", prefix, n), n, nil
@@ -326,28 +348,59 @@ func fixedIP(base string, num int, ipRange *net.IPNet) (net.IP, error) {
 	v := uint32(b[0])<<24 | uint32(b[1])<<16 | uint32(b[2])<<8 | uint32(b[3])
 	v += uint32(num)
 	ip := net.IPv4(byte(v>>24), byte(v>>16), byte(v>>8), byte(v)).To4()
-	if !ipRange.Contains(ip) {
+	if ipRange != nil && !ipRange.Contains(ip) {
 		return nil, fmt.Errorf("server number %d gives %s, outside networkIPRange %s", num, ip, ipRange)
 	}
 	return ip, nil
 }
 
-// attachAndStart attaches the primary network in ipRange, then powers on.
-func (p *Provider) attachAndStart(ctx context.Context, server *hcloud.Server, networkID int64, ipRange *net.IPNet, ip net.IP) error {
-	attach := hcloud.ServerAttachToNetworkOpts{Network: &hcloud.Network{ID: networkID}}
-	if ip != nil {
-		attach.IP = ip // exact address; the API rejects IP together with IPRange
-	} else {
-		attach.IPRange = ipRange
+func additionalBase(opts CreateOpts, i int) string {
+	if i < len(opts.AdditionalNetworkIPBases) {
+		return opts.AdditionalNetworkIPBases[i]
 	}
-	action, _, err := p.client.AttachToNetwork(ctx, server, attach)
+	return ""
+}
+
+// planAttachments lists the networks to attach before power-on: the primary
+// (fixed IP or ipRange), then additional networks that have an IP base.
+func planAttachments(opts CreateOpts, ipRange *net.IPNet, num int) ([]hcloud.ServerAttachToNetworkOpts, error) {
+	primary := hcloud.ServerAttachToNetworkOpts{Network: &hcloud.Network{ID: opts.NetworkID}}
+	ip, err := fixedIP(opts.NetworkIPBase, num, ipRange)
 	if err != nil {
-		return fmt.Errorf("attaching network %d in %s (ip %v): %w", networkID, ipRange, ip, err)
+		return nil, err
 	}
-	if err := p.wait(ctx, action); err != nil {
-		return fmt.Errorf("waiting for network attach: %w", err)
+	if ip != nil {
+		primary.IP = ip // exact address; the API rejects IP together with IPRange
+	} else {
+		primary.IPRange = ipRange
 	}
-	action, _, err = p.client.Poweron(ctx, server)
+	out := []hcloud.ServerAttachToNetworkOpts{primary}
+	for i, id := range opts.AdditionalNetworkIDs {
+		base := additionalBase(opts, i)
+		if base == "" {
+			continue // attached at create, hcloud picks the IP
+		}
+		ip, err := fixedIP(base, num, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, hcloud.ServerAttachToNetworkOpts{Network: &hcloud.Network{ID: id}, IP: ip})
+	}
+	return out, nil
+}
+
+// attachAndStart attaches the planned networks, then powers on.
+func (p *Provider) attachAndStart(ctx context.Context, server *hcloud.Server, attachments []hcloud.ServerAttachToNetworkOpts) error {
+	for _, a := range attachments {
+		action, _, err := p.client.AttachToNetwork(ctx, server, a)
+		if err != nil {
+			return fmt.Errorf("attaching network %d (ip %v, range %v): %w", a.Network.ID, a.IP, a.IPRange, err)
+		}
+		if err := p.wait(ctx, action); err != nil {
+			return fmt.Errorf("waiting for network %d attach: %w", a.Network.ID, err)
+		}
+	}
+	action, _, err := p.client.Poweron(ctx, server)
 	if err != nil {
 		return fmt.Errorf("powering on: %w", err)
 	}

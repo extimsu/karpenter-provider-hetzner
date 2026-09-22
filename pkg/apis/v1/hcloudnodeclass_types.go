@@ -58,6 +58,13 @@ type HCloudNodeClassSpec struct {
 	// +optional
 	NetworkIPBase string `json:"networkIPBase,omitempty"`
 
+	// AdditionalNetworkIPBases gives the server fixed IPs on AdditionalNetworkIDs,
+	// index by index: base + the ServerNamePrefix number (e.g. base 10.10.0.39,
+	// "<prefix>-05" -> 10.10.0.44). An empty entry lets hcloud pick. Requires
+	// ServerNamePrefix and NetworkIPRange (networks are attached before boot).
+	// +optional
+	AdditionalNetworkIPBases []string `json:"additionalNetworkIPBases,omitempty"`
+
 	// AdditionalNetworkIDs attaches further private networks after NetworkID,
 	// in order (e.g. a dedicated egress network). NetworkID stays the primary
 	// network used for the node's InternalIP.

@@ -55,6 +55,15 @@ spec:
                   minimum: 1
                   type: integer
                 type: array
+              additionalNetworkIPBases:
+                description: |-
+                  AdditionalNetworkIPBases gives the server fixed IPs on AdditionalNetworkIDs,
+                  index by index: base + the ServerNamePrefix number (e.g. base 10.10.0.39,
+                  "<prefix>-05" -> 10.10.0.44). An empty entry lets hcloud pick. Requires
+                  ServerNamePrefix and NetworkIPRange (networks are attached before boot).
+                items:
+                  type: string
+                type: array
               enablePublicIPv4:
                 default: true
                 description: |-

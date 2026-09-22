@@ -38,13 +38,17 @@ type mockServerClient struct {
 	lastOpts         hcloud.ServerCreateOpts
 	uniqueNames      bool // reject duplicate names like hcloud does
 	attachOpts       *hcloud.ServerAttachToNetworkOpts
+	allAttach        []hcloud.ServerAttachToNetworkOpts
 	attachErr        error
 	calls            []string
 }
 
 func (m *mockServerClient) AttachToNetwork(_ context.Context, _ *hcloud.Server, opts hcloud.ServerAttachToNetworkOpts) (*hcloud.Action, *hcloud.Response, error) {
 	m.calls = append(m.calls, "attach")
-	m.attachOpts = &opts
+	if m.attachOpts == nil {
+		m.attachOpts = &opts // first attach = primary network
+	}
+	m.allAttach = append(m.allAttach, opts)
 	return nil, nil, m.attachErr
 }
 
@@ -798,5 +802,74 @@ func TestFixedIP(t *testing.T) {
 	}
 	if _, err := fixedIP("10.0.20.200", 0, r); err == nil {
 		t.Error("base without a name number must error")
+	}
+}
+
+func withPrivateIPs(client *mockServerClient, name string, karpenter bool, ips ...string) {
+	namedServer(client, name, karpenter)
+	s := client.servers[client.nextID-1]
+	for _, ip := range ips {
+		s.PrivateNet = append(s.PrivateNet, hcloud.ServerPrivateNet{IP: net.ParseIP(ip)})
+	}
+}
+
+func TestCreate_AdditionalNetworkIPBaseAttachesFixedEgressIP(t *testing.T) {
+	client := newMockServerClient()
+	for i, n := range []string{"01", "02", "03", "04"} {
+		withPrivateIPs(client, "de-fsn1-dev-worker-"+n, false, fmt.Sprintf("10.0.20.20%d", i+1), fmt.Sprintf("10.10.0.4%d", i))
+	}
+	server, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+		NetworkID: 10, NetworkIPRange: "10.0.20.0/24", NetworkIPBase: "10.0.20.200",
+		AdditionalNetworkIDs: []int64{20}, AdditionalNetworkIPBases: []string{"10.10.0.39"},
+		ServerNamePrefix: "de-fsn1-dev-worker",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if server.Name != "de-fsn1-dev-worker-05" {
+		t.Errorf("expected de-fsn1-dev-worker-05, got %s", server.Name)
+	}
+	if n := len(client.lastOpts.Networks); n != 0 {
+		t.Errorf("fixed-IP networks must not be attached at create, got %d", n)
+	}
+	var got []string
+	for _, a := range client.allAttach {
+		got = append(got, fmt.Sprintf("%d=%s", a.Network.ID, a.IP))
+	}
+	if strings.Join(got, ",") != "10=10.0.20.205,20=10.10.0.44" {
+		t.Errorf("expected attaches 10=10.0.20.205,20=10.10.0.44, got %v", got)
+	}
+}
+
+func TestCreate_NumberSkipsTakenFixedIPs(t *testing.T) {
+	client := newMockServerClient()
+	withPrivateIPs(client, "de-fsn1-dev-worker-10", false, "10.0.20.210", "10.10.0.49")
+	withPrivateIPs(client, "db-dev", false, "10.10.0.50") // = worker-11's egress IP
+	server, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+		NetworkID: 10, NetworkIPRange: "10.0.20.0/24", NetworkIPBase: "10.0.20.200",
+		AdditionalNetworkIDs: []int64{20}, AdditionalNetworkIPBases: []string{"10.10.0.39"},
+		ServerNamePrefix: "de-fsn1-dev-worker",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if server.Name != "de-fsn1-dev-worker-12" {
+		t.Errorf("expected worker-11 skipped (10.10.0.50 taken), got %s", server.Name)
+	}
+}
+
+func TestCreate_AdditionalNetworkWithoutBaseStillAttachedAtCreate(t *testing.T) {
+	client := newMockServerClient()
+	_, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+		NetworkID: 10, NetworkIPRange: "10.0.20.0/24", AdditionalNetworkIDs: []int64{20},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if n := client.lastOpts.Networks; len(n) != 1 || n[0].ID != 20 {
+		t.Errorf("network without base must be attached at create, got %+v", n)
 	}
 }
