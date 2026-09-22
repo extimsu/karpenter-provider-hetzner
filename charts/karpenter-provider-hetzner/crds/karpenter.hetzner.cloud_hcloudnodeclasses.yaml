@@ -106,6 +106,14 @@ spec:
                 format: int64
                 minimum: 1
                 type: integer
+              networkIPBase:
+                description: |-
+                  NetworkIPBase gives each server a fixed IP on NetworkID derived from its
+                  ServerNamePrefix number: base + NN (e.g. base 10.0.20.200, "<prefix>-05"
+                  -> 10.0.20.205), matching statically numbered workers. Requires
+                  ServerNamePrefix and NetworkIPRange; the IP must fall inside the range.
+                format: ipv4
+                type: string
               networkIPRange:
                 description: |-
                   NetworkIPRange pins the node's IP on NetworkID to this subnet (CIDR of an

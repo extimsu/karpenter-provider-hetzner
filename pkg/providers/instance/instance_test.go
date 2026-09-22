@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -744,4 +745,58 @@ func (r *racingLister) AllWithOpts(ctx context.Context, opts hcloud.ServerListOp
 		}
 	}
 	return visible, err
+}
+
+func TestCreate_NetworkIPBaseAttachesFixedIPFromNameNumber(t *testing.T) {
+	client := newMockServerClient()
+	for _, n := range []string{"01", "02", "03", "04"} {
+		namedServer(client, "de-fsn1-dev-worker-"+n, false)
+	}
+	server, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+		NetworkID: 10, NetworkIPRange: "10.0.20.0/24",
+		ServerNamePrefix: "de-fsn1-dev-worker", NetworkIPBase: "10.0.20.200",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if server.Name != "de-fsn1-dev-worker-05" {
+		t.Errorf("expected de-fsn1-dev-worker-05, got %s", server.Name)
+	}
+	a := client.attachOpts
+	if a == nil || a.IP.String() != "10.0.20.205" || a.IPRange != nil {
+		t.Errorf("expected attach with IP 10.0.20.205 and no IPRange, got %+v", a)
+	}
+}
+
+func TestCreate_NetworkIPBaseOutsideRangeDeletesServer(t *testing.T) {
+	client := newMockServerClient()
+	namedServer(client, "de-fsn1-dev-worker-60", false) // -> 61 -> .261: outside the /24
+	_, err := NewProvider(client, "test-cluster").Create(context.Background(), CreateOpts{
+		Name: "default-abcde", ServerType: "cx23", Location: "fsn1", Image: &hcloud.Image{ID: 1},
+		NetworkID: 10, NetworkIPRange: "10.0.20.0/24",
+		ServerNamePrefix: "de-fsn1-dev-worker", NetworkIPBase: "10.0.20.200",
+	})
+	if err == nil {
+		t.Fatal("expected an error for an IP outside networkIPRange")
+	}
+	if client.attachOpts != nil {
+		t.Error("must not attach with an out-of-range IP")
+	}
+	if len(client.deleted) != 1 {
+		t.Errorf("stopped server must be deleted, deleted=%v", client.deleted)
+	}
+}
+
+func TestFixedIP(t *testing.T) {
+	_, r, _ := net.ParseCIDR("10.0.20.0/24")
+	if ip, err := fixedIP("", 5, r); ip != nil || err != nil {
+		t.Errorf("no base: want nil,nil got %v,%v", ip, err)
+	}
+	if ip, _ := fixedIP("10.0.20.100", 7, r); ip.String() != "10.0.20.107" {
+		t.Errorf("want 10.0.20.107, got %v", ip)
+	}
+	if _, err := fixedIP("10.0.20.200", 0, r); err == nil {
+		t.Error("base without a name number must error")
+	}
 }

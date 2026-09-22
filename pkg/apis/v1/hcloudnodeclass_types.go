@@ -50,6 +50,14 @@ type HCloudNodeClassSpec struct {
 	// +optional
 	ServerNamePrefix string `json:"serverNamePrefix,omitempty"`
 
+	// NetworkIPBase gives each server a fixed IP on NetworkID derived from its
+	// ServerNamePrefix number: base + NN (e.g. base 10.0.20.200, "<prefix>-05"
+	// -> 10.0.20.205), matching statically numbered workers. Requires
+	// ServerNamePrefix and NetworkIPRange; the IP must fall inside the range.
+	// +kubebuilder:validation:Format=ipv4
+	// +optional
+	NetworkIPBase string `json:"networkIPBase,omitempty"`
+
 	// AdditionalNetworkIDs attaches further private networks after NetworkID,
 	// in order (e.g. a dedicated egress network). NetworkID stays the primary
 	// network used for the node's InternalIP.
