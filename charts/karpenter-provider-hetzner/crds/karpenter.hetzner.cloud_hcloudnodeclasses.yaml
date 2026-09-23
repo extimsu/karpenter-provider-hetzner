@@ -179,6 +179,15 @@ spec:
             - locations
             - networkID
             type: object
+            x-kubernetes-validations:
+            - message: networkIPBase requires serverNamePrefix and networkIPRange
+              rule: '!has(self.networkIPBase) || (has(self.serverNamePrefix) && has(self.networkIPRange))'
+            - message: additionalNetworkIPBases requires serverNamePrefix and networkIPRange
+              rule: '!has(self.additionalNetworkIPBases) || (has(self.serverNamePrefix)
+                && has(self.networkIPRange))'
+            - message: additionalNetworkIPBases cannot have more entries than additionalNetworkIDs
+              rule: '!has(self.additionalNetworkIPBases) || (has(self.additionalNetworkIDs)
+                && size(self.additionalNetworkIPBases) <= size(self.additionalNetworkIDs))'
           status:
             properties:
               conditions:

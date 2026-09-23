@@ -630,6 +630,30 @@ func TestIsDrifted_NetworkAttached_NoDrift(t *testing.T) {
 	}
 }
 
+// TestIsDrifted_AdditionalNetworkMissing verifies that a server missing one of
+// the NodeClass additionalNetworkIDs is flagged as DriftNetwork, so adding a
+// network to the NodeClass rolls existing nodes.
+func TestIsDrifted_AdditionalNetworkMissing(t *testing.T) {
+	nc := baselineNodeClass() // expects NetworkID=1
+	nc.Spec.AdditionalNetworkIDs = []int64{2}
+	server := baselineServer()
+	server.PrivateNet = []hcloud.ServerPrivateNet{{Network: &hcloud.Network{ID: 1}}}
+	cp, nodeClaim := buildCP(t, nc, server)
+	reason, err := cp.IsDrifted(context.Background(), nodeClaim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reason != cloudprovider.DriftNetwork {
+		t.Errorf("want DriftNetwork, got %q", reason)
+	}
+
+	server.PrivateNet = append(server.PrivateNet, hcloud.ServerPrivateNet{Network: &hcloud.Network{ID: 2}})
+	cp, nodeClaim = buildCP(t, nc, server)
+	if reason, err = cp.IsDrifted(context.Background(), nodeClaim); err != nil || reason != "" {
+		t.Errorf("expected no drift with every network attached, got %q (err %v)", reason, err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Location drift tests
 // ---------------------------------------------------------------------------

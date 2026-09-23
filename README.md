@@ -141,6 +141,11 @@ Provisioned nodes carry, in addition to the well-known Karpenter labels:
 |-------|------|----------|---------|-------------|
 | `locations` | `[]string` | yes | — | Hetzner locations (min 1) |
 | `networkID` | `int64` | yes | — | Private network ID nodes attach to |
+| `additionalNetworkIDs` | `[]int64` | no | — | Further private networks attached after `networkID`, in order (e.g. a dedicated egress network). `networkID` stays the primary network and the source of the node's InternalIP. A server missing any of them is drifted (`NetworkDrift`). |
+| `networkIPRange` | `string` (CIDR) | no | — | Pin the node's IP on `networkID` to this existing subnet. Server create cannot choose a subnet, so the server is created stopped, attached with this `ip_range`, then powered on before first boot. A failed attach deletes the stopped server. |
+| `serverNamePrefix` | `string` | no | — | Name servers (and so nodes) `<prefix>-NN` instead of after the NodeClaim. NN continues the numbering of existing non-Karpenter servers with that prefix: static `-01..-04` → Karpenter nodes `-05`, `-06`, …. A name taken by a concurrent create is retried with the next number. |
+| `networkIPBase` | `string` (IPv4) | no | — | Fixed IP on `networkID`: base + NN (base `10.0.20.200`, `<prefix>-05` → `10.0.20.205`). Requires `serverNamePrefix` and `networkIPRange`; the IP must fall inside the range. |
+| `additionalNetworkIPBases` | `[]string` | no | — | Fixed IPs on `additionalNetworkIDs`, index-aligned, base + NN; an empty entry lets hcloud pick. Requires `serverNamePrefix` and `networkIPRange`. Numbering skips any NN whose fixed IP another server already holds. |
 | `imageSelector.family` | `talos`\|`ubuntu` | yes | — | OS image family |
 | `imageSelector.version` | `string` | no | newest | Version substring to match against the image description |
 | `imageSelector.selector` | `map[string]string` | no | — | hcloud label filter applied when listing images (e.g. `{"caph-image-name": "talos-v1.9.5-gvisor"}`). Prefer this over `version` to pin an exact snapshot (version + baked extensions). All labels must match; the provider guards against provisioning a node whose resolved image arch does not match the server type. |

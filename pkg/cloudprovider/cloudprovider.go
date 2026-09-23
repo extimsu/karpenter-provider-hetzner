@@ -442,16 +442,15 @@ func (cp *CloudProvider) IsDrifted(ctx context.Context, nodeClaim *karpv1.NodeCl
 		}
 	}
 
-	// Check network drift: ensure the server is attached to the expected network.
-	if nodeClass.Spec.NetworkID > 0 {
-		attached := false
-		for _, pn := range server.PrivateNet {
-			if pn.Network != nil && pn.Network.ID == nodeClass.Spec.NetworkID {
-				attached = true
-				break
-			}
+	// Check network drift: ensure the server is attached to every NodeClass network.
+	attachedNets := make(map[int64]bool, len(server.PrivateNet))
+	for _, pn := range server.PrivateNet {
+		if pn.Network != nil {
+			attachedNets[pn.Network.ID] = true
 		}
-		if !attached {
+	}
+	for _, want := range append([]int64{nodeClass.Spec.NetworkID}, nodeClass.Spec.AdditionalNetworkIDs...) {
+		if want > 0 && !attachedNets[want] {
 			return logDrift(DriftNetwork, nodeClaim.Status.ProviderID), nil
 		}
 	}

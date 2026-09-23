@@ -24,6 +24,9 @@ type HCloudNodeClass struct {
 	Status            HCloudNodeClassStatus `json:"status,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.networkIPBase) || (has(self.serverNamePrefix) && has(self.networkIPRange))",message="networkIPBase requires serverNamePrefix and networkIPRange"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalNetworkIPBases) || (has(self.serverNamePrefix) && has(self.networkIPRange))",message="additionalNetworkIPBases requires serverNamePrefix and networkIPRange"
+// +kubebuilder:validation:XValidation:rule="!has(self.additionalNetworkIPBases) || (has(self.additionalNetworkIDs) && size(self.additionalNetworkIPBases) <= size(self.additionalNetworkIDs))",message="additionalNetworkIPBases cannot have more entries than additionalNetworkIDs"
 type HCloudNodeClassSpec struct {
 	// +kubebuilder:validation:MinItems=1
 	Locations []string `json:"locations"`
